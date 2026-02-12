@@ -13,9 +13,11 @@ def main() -> None:
     load_dotenv()
 
     if len(sys.argv) > 1 and sys.argv[1] == "bot":
-        # TODO: Start Telegram bot
-        print("Telegram bot mode not yet implemented")
-        sys.exit(1)
+        from .telegram import TelegramBot
+
+        bot = TelegramBot()
+        bot.run()
+        return
 
     asyncio.run(run_cli())
 

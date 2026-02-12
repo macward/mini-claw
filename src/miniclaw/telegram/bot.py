@@ -1,0 +1,278 @@
+"""Telegram bot integration for MiniClaw."""
+
+import logging
+import os
+import re
+from typing import Any
+
+from telegram import Update
+from telegram.constants import ParseMode
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    ContextTypes,
+    MessageHandler,
+    filters,
+)
+
+from ..agent import AgentConfig, AgentLoop, StopReason
+from ..logging import get_logger
+from ..sandbox import SandboxConfig, SandboxManager
+from ..session import SessionConfig, SessionManager
+from ..tools import BashTool, ToolRegistry, WebFetchTool
+
+
+logger = logging.getLogger(__name__)
+
+WELCOME_MESSAGE = """
+🦀 *MiniClaw*
+
+Soy un asistente que puede ejecutar comandos en un entorno seguro.
+
+*Comandos disponibles:*
+/start - Mostrar este mensaje
+/reset - Reiniciar sesión (limpia historial y contenedor)
+/stop - Cancelar operación en curso
+
+*Notas:*
+• Los comandos se ejecutan en un contenedor Docker aislado
+• Sin acceso a red desde el contenedor
+• Los archivos persisten en /workspace durante la sesión
+
+Escríbeme lo que necesitas y te ayudaré.
+"""
+
+MAX_MESSAGE_LENGTH = 4096
+
+
+def escape_markdown(text: str) -> str:
+    """Escape special characters for Telegram MarkdownV2."""
+    # Characters that need escaping in MarkdownV2
+    special_chars = r"_*[]()~`>#+-=|{}.!"
+    pattern = f"([{re.escape(special_chars)}])"
+    return re.sub(pattern, r"\\\1", text)
+
+
+def truncate_message(text: str, max_length: int = MAX_MESSAGE_LENGTH) -> str:
+    """Truncate message to fit Telegram limits."""
+    if len(text) <= max_length:
+        return text
+    return text[: max_length - 20] + "\n... [truncado]"
+
+
+def format_response(response: str, stop_reason: StopReason, turns: int) -> str:
+    """Format agent response for Telegram."""
+    text = response
+
+    if stop_reason == StopReason.MAX_TURNS:
+        text += f"\n\n⚠️ Alcancé el máximo de turnos ({turns})"
+    elif stop_reason == StopReason.REPEATED_CALL:
+        text += "\n\n⚠️ Detecté un loop, me detuve"
+    elif stop_reason == StopReason.CONSECUTIVE_ERRORS:
+        text += "\n\n⚠️ Demasiados errores consecutivos"
+
+    return truncate_message(text)
+
+
+class TelegramBot:
+    """Telegram bot for MiniClaw."""
+
+    def __init__(
+        self,
+        token: str | None = None,
+        agent_config: AgentConfig | None = None,
+        sandbox_config: SandboxConfig | None = None,
+        session_config: SessionConfig | None = None,
+    ) -> None:
+        self.token = token or os.getenv("TELEGRAM_TOKEN")
+        if not self.token:
+            raise ValueError("TELEGRAM_TOKEN not set")
+
+        self.agent_config = agent_config or AgentConfig()
+        self.sandbox = SandboxManager(sandbox_config)
+        self.sessions = SessionManager(session_config, sandbox=self.sandbox)
+
+        # Create tool registry
+        self.registry = ToolRegistry()
+        self.registry.register(BashTool(self.sandbox))
+        self.registry.register(WebFetchTool())
+
+        self.json_logger = get_logger()
+        self._app: Application | None = None
+
+    def _get_chat_id(self, update: Update) -> str:
+        """Get chat_id as string from update."""
+        assert update.effective_chat is not None
+        return str(update.effective_chat.id)
+
+    async def _handle_start(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        """Handle /start command."""
+        assert update.message is not None
+        chat_id = self._get_chat_id(update)
+
+        self.json_logger.log("telegram_start", chat_id=chat_id)
+
+        await update.message.reply_text(
+            WELCOME_MESSAGE,
+            parse_mode=ParseMode.MARKDOWN,
+        )
+
+    async def _handle_reset(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        """Handle /reset command."""
+        assert update.message is not None
+        chat_id = self._get_chat_id(update)
+
+        await self.sessions.destroy_session(chat_id)
+
+        self.json_logger.log("telegram_reset", chat_id=chat_id)
+
+        await update.message.reply_text(
+            "✨ Sesión reiniciada. Contenedor y historial limpiados."
+        )
+
+    async def _handle_stop(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        """Handle /stop command."""
+        assert update.message is not None
+        chat_id = self._get_chat_id(update)
+
+        # We can't really stop an in-progress LLM call, but we can release the lock
+        if self.sessions.is_busy(chat_id):
+            self.sessions.release(chat_id)
+            await update.message.reply_text("⏹ Operación cancelada.")
+        else:
+            await update.message.reply_text("No hay operación en curso.")
+
+    async def _handle_message(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        """Handle incoming messages."""
+        assert update.message is not None
+        assert update.message.text is not None
+
+        chat_id = self._get_chat_id(update)
+        message = update.message.text
+
+        # Try to acquire session
+        acquired, error = await self.sessions.acquire(chat_id)
+        if not acquired:
+            await update.message.reply_text(error or "Ocupado")
+            return
+
+        try:
+            # Log incoming message
+            self.json_logger.log(
+                "telegram_message",
+                chat_id=chat_id,
+                message_length=len(message),
+            )
+            self.sessions.add_message(chat_id, "user", message)
+
+            # Send typing indicator
+            await update.message.chat.send_action("typing")
+
+            # Create agent and run
+            agent = AgentLoop(self.registry, self.agent_config)
+            result = await agent.run(message, chat_id=chat_id)
+
+            # Log result
+            self.json_logger.log_agent_stop(
+                result.stop_reason.value,
+                chat_id=chat_id,
+                turns=result.turns,
+            )
+            self.sessions.add_message(chat_id, "assistant", result.response)
+
+            # Format and send response
+            response_text = format_response(
+                result.response,
+                result.stop_reason,
+                result.turns,
+            )
+
+            await update.message.reply_text(response_text)
+
+        except Exception as e:
+            logger.exception("Error processing message")
+            self.json_logger.log("telegram_error", chat_id=chat_id, error=str(e))
+            await update.message.reply_text(f"❌ Error: {e}")
+
+        finally:
+            self.sessions.release(chat_id)
+
+    def build_app(self) -> Application:
+        """Build the Telegram application."""
+        self._app = (
+            Application.builder()
+            .token(self.token)
+            .build()
+        )
+
+        # Add handlers
+        self._app.add_handler(CommandHandler("start", self._handle_start))
+        self._app.add_handler(CommandHandler("reset", self._handle_reset))
+        self._app.add_handler(CommandHandler("stop", self._handle_stop))
+        self._app.add_handler(
+            MessageHandler(filters.TEXT & ~filters.COMMAND, self._handle_message)
+        )
+
+        return self._app
+
+    async def start(self) -> None:
+        """Start the bot."""
+        app = self.build_app()
+
+        # Start session cleanup task
+        self.sessions.start_cleanup_task()
+
+        logger.info("Starting Telegram bot...")
+        await app.initialize()
+        await app.start()
+        await app.updater.start_polling()  # type: ignore
+
+    async def stop(self) -> None:
+        """Stop the bot."""
+        self.sessions.stop_cleanup_task()
+
+        if self._app:
+            await self._app.updater.stop()  # type: ignore
+            await self._app.stop()
+            await self._app.shutdown()
+
+    def run(self) -> None:
+        """Run the bot (blocking)."""
+        app = self.build_app()
+        self.sessions.start_cleanup_task()
+
+        logger.info("Starting Telegram bot...")
+        app.run_polling()
+
+
+async def run_telegram_bot() -> None:
+    """Run the Telegram bot."""
+    from ..logging import configure_logger
+
+    configure_logger()
+
+    token = os.getenv("TELEGRAM_TOKEN")
+    if not token:
+        print("❌ Error: TELEGRAM_TOKEN environment variable not set")
+        return
+
+    bot = TelegramBot(token=token)
+    await bot.start()
+
+    try:
+        # Keep running
+        import asyncio
+        while True:
+            await asyncio.sleep(1)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        await bot.stop()
