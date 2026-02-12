@@ -195,12 +195,16 @@ class TelegramBot:
             )
             self.sessions.add_message(chat_id, "user", message)
 
+            # Get conversation history (exclude current message)
+            all_messages = self.sessions.get_messages(chat_id, limit=20, for_llm=True)
+            history = all_messages[:-1] or None
+
             # Send typing indicator
             await update.message.chat.send_action("typing")
 
-            # Create agent and run
+            # Create agent and run with history
             agent = AgentLoop(self.registry, self.agent_config)
-            result = await agent.run(message, chat_id=chat_id)
+            result = await agent.run(message, chat_id=chat_id, history=history)
 
             # Log result
             self.json_logger.log_agent_stop(
