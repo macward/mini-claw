@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__vibeMCP__tool_init_project",
+      "mcp__vibeMCP__tool_create_task",
+      "mcp__vibeMCP__tool_create_doc",
+      "mcp__vibeMCP__list_tasks",
+      "Bash(clear:*)",
+      "mcp__vibeMCP__read_doc",
+      "mcp__vibeMCP__tool_update_task_status",
+      "Bash(python:*)"
+    ]
+  }
+}

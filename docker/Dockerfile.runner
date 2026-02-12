@@ -1,0 +1,27 @@
+# miniclaw-runner: Minimal sandbox image for executing user commands
+# Build: docker build -t miniclaw-runner:latest -f docker/Dockerfile.runner .
+
+FROM alpine:3.19
+
+# Install only essential utilities - NO network tools (curl, wget, etc.)
+RUN apk add --no-cache \
+    coreutils \
+    bash \
+    findutils \
+    grep \
+    sed \
+    gawk \
+    && rm -rf /var/cache/apk/*
+
+# Create non-root user
+RUN adduser -D -u 1000 -g 1000 runner
+
+# Create workspace directory
+RUN mkdir -p /workspace && chown runner:runner /workspace
+
+# Switch to non-root user
+USER runner
+WORKDIR /workspace
+
+# Default command (overridden by docker exec)
+CMD ["bash"]

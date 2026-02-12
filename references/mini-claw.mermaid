@@ -1,0 +1,67 @@
+# Create Mermaid diagram file for MiniClaw v1.2 (Docker Architecture)
+
+import pypandoc
+
+diagram_content = """
+# MiniClaw — Arquitectura v1.2 (MVP con Docker)
+
+```mermaid
+graph TB
+
+    subgraph INPUT["Input Layer"]
+        CLI["CLI / REPL"]
+        TG["Telegram Bot"]
+    end
+
+    subgraph CORE["Agent Core"]
+        LOOP["Agent Loop<br/>think → act → observe"]
+        TR["ToolRegistry"]
+        SM["SessionManager"]
+        MEM["Memory (STM/LTM)"]
+    end
+
+    subgraph SANDBOX["Docker Sandbox Layer"]
+        SBM["SandboxManager"]
+        CONTAINER["miniclaw-runner-{chat_id}<br/>isolated container"]
+        WORKSPACE["/workspace<br/>volume mount"]
+    end
+
+    subgraph HOST["Host Layer"]
+        WEB["web_fetch (SSRF guarded)"]
+        SESSFILES["sessions + memory.json"]
+        LOGS["logs.jsonl"]
+    end
+
+    subgraph LLM["LLM Provider"]
+        PROMPT["PromptBuilder"]
+        GROQ["Groq API"]
+    end
+
+    CLI & TG --> LOOP
+    LOOP --> PROMPT --> GROQ --> LOOP
+
+    LOOP --> TR
+    TR --> SBM
+    SBM --> CONTAINER
+    CONTAINER --> WORKSPACE
+
+    LOOP --> WEB
+
+    LOOP <--> MEM
+    LOOP <--> SM
+    SM --> SESSFILES
+    LOOP --> LOGS
+```
+"""
+
+output_path = "/mnt/data/MiniClaw_Architecture_v1_2_Docker.md"
+
+pypandoc.convert_text(
+    diagram_content,
+    'md',
+    format='md',
+    outputfile=output_path,
+    extra_args=['--standalone']
+)
+
+output_path
