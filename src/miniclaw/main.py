@@ -5,29 +5,7 @@ import sys
 
 from dotenv import load_dotenv
 
-
-async def run_cli() -> None:
-    """Run the CLI interface."""
-    print("MiniClaw CLI - Type 'exit' to quit")
-    print("-" * 40)
-
-    while True:
-        try:
-            user_input = input("\n> ").strip()
-            if user_input.lower() in ("exit", "quit", "/exit"):
-                print("Goodbye!")
-                break
-            if not user_input:
-                continue
-
-            # TODO: Integrate with AgentLoop
-            print(f"[placeholder] Received: {user_input}")
-
-        except KeyboardInterrupt:
-            print("\nInterrupted. Goodbye!")
-            break
-        except EOFError:
-            break
+from .cli import run_cli
 
 
 def main() -> None:
