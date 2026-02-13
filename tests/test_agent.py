@@ -4,6 +4,7 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock
 
 from miniclaw.agent import AgentConfig, AgentLoop, StopReason
+from miniclaw.agent.prompt import build_system_prompt
 from miniclaw.tools import Tool, ToolResult, ToolRegistry
 
 
@@ -221,3 +222,48 @@ async def test_run_without_history(registry: ToolRegistry, mock_client: AsyncMoc
     assert messages[1]["content"] == "Hi"
 
     assert result.response == "Hello!"
+
+
+class TestBuildSystemPrompt:
+    """Tests for build_system_prompt function."""
+
+    def test_without_skills_block(self):
+        """Prompt without skills block doesn't include skills instructions."""
+        tools_schema = [
+            {"function": {"name": "bash", "description": "Run commands"}}
+        ]
+
+        prompt = build_system_prompt(tools_schema)
+
+        assert "- bash: Run commands" in prompt
+        assert "use_skill" not in prompt
+        assert "<available_skills>" not in prompt
+
+    def test_with_skills_block(self):
+        """Prompt with skills block includes skills instructions."""
+        tools_schema = [
+            {"function": {"name": "bash", "description": "Run commands"}}
+        ]
+        skills_block = """<available_skills>
+- summarize: Summarize documents
+</available_skills>"""
+
+        prompt = build_system_prompt(tools_schema, skills_block)
+
+        assert "- bash: Run commands" in prompt
+        assert "<available_skills>" in prompt
+        assert "summarize" in prompt
+        assert "use_skill" in prompt
+
+    def test_empty_skills_block_no_extra_whitespace(self):
+        """Empty skills block doesn't add extra whitespace."""
+        tools_schema = [
+            {"function": {"name": "bash", "description": "Run commands"}}
+        ]
+
+        prompt_without = build_system_prompt(tools_schema, "")
+        prompt_whitespace = build_system_prompt(tools_schema, "   ")
+
+        # Both should produce the same output without skills instructions
+        assert prompt_without == prompt_whitespace
+        assert "use_skill" not in prompt_without

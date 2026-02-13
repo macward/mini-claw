@@ -2,7 +2,7 @@
 
 from typing import Any
 
-SYSTEM_PROMPT = """You are MiniClaw, a helpful assistant that can execute commands safely in a sandboxed environment.
+SYSTEM_PROMPT_BASE = """You are MiniClaw, a helpful assistant that can execute commands safely in a sandboxed environment.
 
 You have access to the following tools:
 {tools_description}
@@ -17,9 +17,26 @@ Important:
 
 If you cannot complete a task with the available tools, explain why."""
 
+SKILLS_INSTRUCTIONS = """
+{available_skills_block}
 
-def build_system_prompt(tools_schema: list[dict[str, Any]]) -> str:
-    """Build the system prompt with available tools."""
+When a task matches a skill's description, use the `use_skill` tool to invoke it.
+For simple tasks that only need a single tool, use the tool directly."""
+
+
+def build_system_prompt(
+    tools_schema: list[dict[str, Any]],
+    available_skills_block: str = "",
+) -> str:
+    """Build the system prompt with available tools and skills.
+
+    Args:
+        tools_schema: List of tool schemas for the LLM.
+        available_skills_block: Optional XML block with available skills.
+
+    Returns:
+        Complete system prompt string.
+    """
     if not tools_schema:
         tools_desc = "No tools available."
     else:
@@ -27,7 +44,16 @@ def build_system_prompt(tools_schema: list[dict[str, Any]]) -> str:
             f"- {t['function']['name']}: {t['function']['description']}"
             for t in tools_schema
         )
-    return SYSTEM_PROMPT.format(tools_description=tools_desc)
+
+    prompt = SYSTEM_PROMPT_BASE.format(tools_description=tools_desc)
+
+    # Only add skills block if there are skills available
+    if available_skills_block.strip():
+        prompt += SKILLS_INSTRUCTIONS.format(
+            available_skills_block=available_skills_block
+        )
+
+    return prompt
 
 
 def format_tool_result(tool_name: str, success: bool, output: str, error: str | None) -> str:
