@@ -257,3 +257,144 @@ Use JSONL format for all logs with structured fields.
 ### Consequences
 - Logs are not human-readable without tooling
 - Must ensure no sensitive data in logs
+
+---
+
+## ADR-011: Skills System with Two Skill Types
+
+**Status**: Accepted
+**Date**: 2026-02
+
+### Context
+Need extensibility mechanism for complex tasks that go beyond single tool calls.
+
+### Decision
+Implement two skill types:
+1. **PromptSkill**: SKILL.md only - injects instructions into conversation
+2. **CodeSkill**: SKILL.md + skill.py - programmatic orchestration
+
+### Rationale
+- **PromptSkill simplicity**: Non-programmers can create skills with markdown
+- **CodeSkill power**: Developers can orchestrate tools and LLM calls
+- **Unified metadata**: Both types share SKILL.md frontmatter format
+- **Progressive complexity**: Start with PromptSkill, upgrade to CodeSkill when needed
+
+### Consequences
+- Must maintain two loading paths
+- CodeSkill requires dynamic module loading (importlib)
+- skill.py class name must match pattern: `{Name}Skill`
+
+---
+
+## ADR-012: Three-Tier Skill Discovery
+
+**Status**: Accepted
+**Date**: 2026-02
+
+### Context
+Skills should be customizable at project, user, and system levels.
+
+### Decision
+Load skills from three directories with increasing precedence:
+1. **bundled** (lowest): Package-included skills
+2. **user** (medium): ~/.miniclaw/skills/
+3. **workspace** (highest): Project-specific
+
+### Rationale
+- **Override mechanism**: User can customize bundled skills
+- **Project isolation**: Workspace skills don't affect other projects
+- **No merge conflicts**: Higher priority replaces, doesn't merge
+
+### Consequences
+- Must track source of each skill
+- Same skill name in multiple dirs = only highest priority loaded
+- Refresh must re-scan all directories
+
+---
+
+## ADR-013: mtime-Based Skill Cache
+
+**Status**: Accepted
+**Date**: 2026-02
+
+### Context
+Scanning directories and parsing SKILL.md on every request is wasteful.
+
+### Decision
+Track mtime of SKILL.md files and only reload when changed.
+
+### Implementation
+- `_mtimes: dict[str, float]` - cached modification times
+- `_skill_paths: dict[str, Path]` - skill directory paths
+- `refresh_changed()` - only reload modified skills
+- `clear_cache()` - full cache invalidation
+
+### Rationale
+- **Performance**: Avoid reparsing unchanged files
+- **Development friendly**: Changes detected automatically
+- **Simple invalidation**: mtime comparison is reliable
+
+### Consequences
+- Cache state must be cleaned on unregister
+- Deleted skills detected via missing SKILL.md
+- stat() calls on refresh (minimal overhead)
+
+---
+
+## ADR-014: tools_required Validation
+
+**Status**: Accepted
+**Date**: 2026-02
+
+### Context
+Skills may depend on specific tools being available.
+
+### Decision
+Validate `tools_required` against ToolRegistry before execution.
+
+### Implementation
+- SKILL.md frontmatter: `tools_required: [bash, custom_tool]`
+- `get_missing_tools(name, available)` returns missing tool names
+- `execute()` returns error if tools missing
+
+### Rationale
+- **Fail-fast**: Clear error instead of runtime failure
+- **Documentation**: tools_required serves as documentation
+- **Discoverability**: CLI can show dependencies
+
+### Consequences
+- Must pass available tools list to validation
+- PromptSkills can't enforce at runtime (instructions only)
+- Tests must mock tool availability
+
+---
+
+## ADR-015: Skills CLI for Management
+
+**Status**: Accepted
+**Date**: 2026-02
+
+### Context
+Need user-friendly way to manage skills.
+
+### Decision
+Add `miniclaw skills` subcommand with list/enable/disable/info/create.
+
+### Commands
+```
+miniclaw skills list [-a/--all]
+miniclaw skills enable <name>
+miniclaw skills disable <name>
+miniclaw skills info <name>
+miniclaw skills create <name> [--code] [-d DESC]
+```
+
+### Rationale
+- **Discoverability**: Users can see what's available
+- **Runtime config**: Enable/disable without editing files
+- **Scaffolding**: create generates proper structure
+
+### Consequences
+- Config persistence via save_config()
+- Skill names must follow validation rules
+- CLI has no access to runtime ToolRegistry

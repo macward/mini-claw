@@ -173,6 +173,32 @@ Security Controls:
     └── IP allowlist (block private ranges)
 ```
 
+## Skills Layer
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                         SKILLS LAYER                                │
+│  ┌───────────────────────────────────────────────────────────────┐ │
+│  │                    SkillManager                                │ │
+│  │  - discover(): Load from bundled/user/workspace               │ │
+│  │  - match(): Find relevant skills by query                     │ │
+│  │  - execute(): Run skill with SkillContext                     │ │
+│  └───────────────────────────────────────────────────────────────┘ │
+│                              │                                      │
+│              ┌───────────────┼───────────────┐                      │
+│              ▼               ▼               ▼                      │
+│  ┌──────────────────┐ ┌──────────────────┐ ┌──────────────────┐    │
+│  │  PromptSkill     │ │   CodeSkill      │ │ SkillExecutorTool│    │
+│  │  (SKILL.md)      │ │  (skill.py)      │ │ (use_skill tool) │    │
+│  └──────────────────┘ └──────────────────┘ └──────────────────┘    │
+│                                                                     │
+│  Directories (precedence: workspace > user > bundled):             │
+│  ├── bundled:   src/miniclaw/skills/bundled/                       │
+│  ├── user:      ~/.miniclaw/skills/                                │
+│  └── workspace: <project>/.miniclaw/skills/                        │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
 ## File Layout
 
 ```
@@ -185,12 +211,34 @@ src/miniclaw/
 │   ├── __init__.py
 │   ├── loop.py          # Think-Act-Observe cycle
 │   └── prompt.py        # System prompt builder
+├── memory/
+│   ├── __init__.py
+│   ├── extractor.py     # LLM-based fact extraction
+│   ├── manager.py       # MemoryManager
+│   ├── store.py         # SQLite storage
+│   └── tools.py         # RememberTool, ForgetTool
 ├── sandbox/
 │   ├── __init__.py
 │   └── manager.py       # Docker container lifecycle
 ├── session/
 │   ├── __init__.py
 │   └── manager.py       # Per-chat state & locks
+├── skills/
+│   ├── __init__.py
+│   ├── base.py          # Skill, SkillMetadata, SkillContext
+│   ├── cli.py           # miniclaw skills subcommands
+│   ├── code_skill.py    # CodeSkill loader
+│   ├── config.py        # SkillsConfig, load/save
+│   ├── executor_tool.py # SkillExecutorTool (use_skill)
+│   ├── llm_client.py    # GroqLLMClient for CodeSkills
+│   ├── manager.py       # SkillManager
+│   ├── parser.py        # SKILL.md frontmatter parser
+│   ├── prompt_skill.py  # PromptSkill implementation
+│   └── bundled/         # Built-in skills
+│       ├── explain/
+│       │   └── SKILL.md
+│       └── summarize/
+│           └── SKILL.md
 ├── telegram/
 │   ├── __init__.py
 │   └── bot.py           # Telegram bot integration
