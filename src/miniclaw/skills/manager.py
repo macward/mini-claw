@@ -326,6 +326,35 @@ class SkillManager:
 
         return await skill.execute(ctx)
 
+    def match(
+        self, query: str, threshold: float = 0.1
+    ) -> list[tuple[Skill, float]]:
+        """Find skills that can handle a query, scored by relevance.
+
+        Calls can_handle() on all enabled skills and returns those
+        scoring above the threshold, sorted by score descending.
+
+        Args:
+            query: The user query or task description.
+            threshold: Minimum score to include (default 0.1).
+
+        Returns:
+            List of (skill, score) tuples, highest score first.
+        """
+        matches: list[tuple[Skill, float]] = []
+
+        for skill in self._registry.values():
+            if not self.is_skill_available(skill.name):
+                continue
+
+            score = skill.can_handle(query)
+            if score >= threshold:
+                matches.append((skill, score))
+
+        # Sort by score descending
+        matches.sort(key=lambda x: x[1], reverse=True)
+        return matches
+
     def refresh(self) -> None:
         """Re-scan directories and update the registry.
 

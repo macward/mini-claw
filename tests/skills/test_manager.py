@@ -639,3 +639,144 @@ class TestSkillManagerWorkspaceDiscovery:
         manager.discover()
 
         assert manager.skill_count == 1
+
+
+class TestSkillManagerMatch:
+    """Tests for the match() method."""
+
+    def test_match_returns_matching_skills(self, tmp_path):
+        """Match returns skills that can handle the query."""
+        bundled = tmp_path / "bundled"
+        bundled.mkdir()
+
+        create_skill_dir(bundled, "summarize", "Summarize long documents", tags=["text"])
+        create_skill_dir(bundled, "explain", "Explain complex concepts", tags=["learning"])
+
+        config = SkillsConfig(bundled_dir=bundled, user_dir=None)
+        manager = SkillManager(config)
+        manager.discover()
+
+        matches = manager.match("summarize this document")
+
+        assert len(matches) >= 1
+        names = [skill.name for skill, _ in matches]
+        assert "summarize" in names
+
+    def test_match_sorts_by_score_descending(self, tmp_path):
+        """Match results are sorted by score, highest first."""
+        bundled = tmp_path / "bundled"
+        bundled.mkdir()
+
+        create_skill_dir(bundled, "summarize", "Summarize documents quickly")
+        create_skill_dir(bundled, "document_analysis", "Analyze document structure")
+
+        config = SkillsConfig(bundled_dir=bundled, user_dir=None)
+        manager = SkillManager(config)
+        manager.discover()
+
+        matches = manager.match("summarize")
+
+        # First match should have highest score
+        if len(matches) > 1:
+            scores = [score for _, score in matches]
+            assert scores == sorted(scores, reverse=True)
+
+    def test_match_respects_threshold(self, tmp_path):
+        """Match filters out skills below threshold."""
+        bundled = tmp_path / "bundled"
+        bundled.mkdir()
+
+        create_skill_dir(bundled, "summarize", "Summarize documents")
+        create_skill_dir(bundled, "unrelated", "Something completely different")
+
+        config = SkillsConfig(bundled_dir=bundled, user_dir=None)
+        manager = SkillManager(config)
+        manager.discover()
+
+        # High threshold should exclude low-scoring skills
+        matches = manager.match("summarize this text", threshold=0.4)
+
+        names = [skill.name for skill, _ in matches]
+        assert "summarize" in names
+        # "unrelated" should be filtered out due to low score
+
+    def test_match_excludes_disabled_skills(self, tmp_path):
+        """Match excludes disabled skills."""
+        bundled = tmp_path / "bundled"
+        bundled.mkdir()
+
+        create_skill_dir(bundled, "summarize", "Summarize documents")
+        create_skill_dir(bundled, "disabled_sum", "Summarize disabled", enabled=False)
+
+        config = SkillsConfig(bundled_dir=bundled, user_dir=None)
+        manager = SkillManager(config)
+        manager.discover()
+
+        matches = manager.match("summarize")
+
+        names = [skill.name for skill, _ in matches]
+        assert "summarize" in names
+        assert "disabled_sum" not in names
+
+    def test_match_excludes_config_disabled_skills(self, tmp_path):
+        """Match excludes skills in disabled_skills config."""
+        bundled = tmp_path / "bundled"
+        bundled.mkdir()
+
+        create_skill_dir(bundled, "summarize", "Summarize documents")
+        create_skill_dir(bundled, "blocked_sum", "Summarize blocked")
+
+        config = SkillsConfig(
+            bundled_dir=bundled, user_dir=None, disabled_skills=["blocked_sum"]
+        )
+        manager = SkillManager(config)
+        manager.discover()
+
+        matches = manager.match("summarize")
+
+        names = [skill.name for skill, _ in matches]
+        assert "summarize" in names
+        assert "blocked_sum" not in names
+
+    def test_match_returns_empty_for_no_matches(self, tmp_path):
+        """Match returns empty list when nothing matches."""
+        bundled = tmp_path / "bundled"
+        bundled.mkdir()
+
+        create_skill_dir(bundled, "summarize", "Summarize documents")
+
+        config = SkillsConfig(bundled_dir=bundled, user_dir=None)
+        manager = SkillManager(config)
+        manager.discover()
+
+        # Query that shouldn't match anything with default threshold
+        matches = manager.match("xyz123 completely unrelated gibberish", threshold=0.5)
+
+        assert matches == []
+
+    def test_match_with_no_skills(self, tmp_path):
+        """Match returns empty list when no skills registered."""
+        config = SkillsConfig(bundled_dir=tmp_path / "empty", user_dir=None)
+        manager = SkillManager(config)
+
+        matches = manager.match("anything")
+
+        assert matches == []
+
+    def test_match_custom_threshold(self, tmp_path):
+        """Match accepts custom threshold."""
+        bundled = tmp_path / "bundled"
+        bundled.mkdir()
+
+        create_skill_dir(bundled, "summarize", "Summarize documents")
+
+        config = SkillsConfig(bundled_dir=bundled, user_dir=None)
+        manager = SkillManager(config)
+        manager.discover()
+
+        # Very low threshold should include more results
+        matches_low = manager.match("documents", threshold=0.01)
+        # Very high threshold should include fewer results
+        matches_high = manager.match("documents", threshold=0.9)
+
+        assert len(matches_low) >= len(matches_high)
