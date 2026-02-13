@@ -486,3 +486,156 @@ class TestSkillManagerRefresh:
 
         assert manager.skill_count == 2
         assert manager.get("new_skill") is not None
+
+
+class TestSkillManagerWorkspaceDiscovery:
+    """Tests for workspace directory discovery and precedence."""
+
+    def test_discover_workspace_skills(self, tmp_path):
+        """Discover skills from workspace directory."""
+        bundled = tmp_path / "bundled"
+        workspace = tmp_path / "workspace"
+        bundled.mkdir()
+        workspace.mkdir()
+
+        create_skill_dir(workspace, "project_skill", "Project-specific skill")
+
+        config = SkillsConfig(
+            bundled_dir=bundled, user_dir=None, workspace_dir=workspace
+        )
+        manager = SkillManager(config)
+
+        discovered = manager.discover()
+
+        assert len(discovered) == 1
+        skill = manager.get("project_skill")
+        assert skill is not None
+        assert skill.metadata.source == SkillSource.WORKSPACE
+
+    def test_workspace_overrides_user(self, tmp_path):
+        """Workspace skills override user skills with same name."""
+        bundled = tmp_path / "bundled"
+        user = tmp_path / "user"
+        workspace = tmp_path / "workspace"
+        bundled.mkdir()
+        user.mkdir()
+        workspace.mkdir()
+
+        # Create user version
+        create_skill_dir(user, "summarize", "User summarize")
+        # Create workspace version (should override)
+        create_skill_dir(workspace, "summarize", "Workspace summarize")
+
+        config = SkillsConfig(
+            bundled_dir=bundled, user_dir=user, workspace_dir=workspace
+        )
+        manager = SkillManager(config)
+        manager.discover()
+
+        skill = manager.get("summarize")
+        assert skill is not None
+        assert skill.description == "Workspace summarize"
+        assert skill.metadata.source == SkillSource.WORKSPACE
+
+    def test_workspace_overrides_bundled(self, tmp_path):
+        """Workspace skills override bundled skills with same name."""
+        bundled = tmp_path / "bundled"
+        workspace = tmp_path / "workspace"
+        bundled.mkdir()
+        workspace.mkdir()
+
+        # Create bundled version
+        create_skill_dir(bundled, "explain", "Bundled explain")
+        # Create workspace version (should override)
+        create_skill_dir(workspace, "explain", "Workspace explain")
+
+        config = SkillsConfig(
+            bundled_dir=bundled, user_dir=None, workspace_dir=workspace
+        )
+        manager = SkillManager(config)
+        manager.discover()
+
+        skill = manager.get("explain")
+        assert skill is not None
+        assert skill.description == "Workspace explain"
+        assert skill.metadata.source == SkillSource.WORKSPACE
+
+    def test_full_precedence_chain(self, tmp_path):
+        """Test full precedence: workspace > user > bundled."""
+        bundled = tmp_path / "bundled"
+        user = tmp_path / "user"
+        workspace = tmp_path / "workspace"
+        bundled.mkdir()
+        user.mkdir()
+        workspace.mkdir()
+
+        # Create all three versions
+        create_skill_dir(bundled, "skill", "Bundled skill")
+        create_skill_dir(user, "skill", "User skill")
+        create_skill_dir(workspace, "skill", "Workspace skill")
+
+        config = SkillsConfig(
+            bundled_dir=bundled, user_dir=user, workspace_dir=workspace
+        )
+        manager = SkillManager(config)
+        manager.discover()
+
+        skill = manager.get("skill")
+        assert skill is not None
+        # Workspace has highest priority
+        assert skill.description == "Workspace skill"
+        assert skill.metadata.source == SkillSource.WORKSPACE
+
+    def test_mixed_skills_from_all_sources(self, tmp_path):
+        """Skills from all sources coexist when names differ."""
+        bundled = tmp_path / "bundled"
+        user = tmp_path / "user"
+        workspace = tmp_path / "workspace"
+        bundled.mkdir()
+        user.mkdir()
+        workspace.mkdir()
+
+        create_skill_dir(bundled, "bundled_only", "From bundled")
+        create_skill_dir(user, "user_only", "From user")
+        create_skill_dir(workspace, "workspace_only", "From workspace")
+
+        config = SkillsConfig(
+            bundled_dir=bundled, user_dir=user, workspace_dir=workspace
+        )
+        manager = SkillManager(config)
+        manager.discover()
+
+        assert manager.skill_count == 3
+        assert manager.get("bundled_only").metadata.source == SkillSource.BUNDLED
+        assert manager.get("user_only").metadata.source == SkillSource.USER
+        assert manager.get("workspace_only").metadata.source == SkillSource.WORKSPACE
+
+    def test_workspace_none_is_skipped(self, tmp_path):
+        """None workspace_dir is gracefully skipped."""
+        bundled = tmp_path / "bundled"
+        bundled.mkdir()
+        create_skill_dir(bundled, "test", "Test skill")
+
+        config = SkillsConfig(
+            bundled_dir=bundled, user_dir=None, workspace_dir=None
+        )
+        manager = SkillManager(config)
+        manager.discover()
+
+        assert manager.skill_count == 1
+
+    def test_workspace_nonexistent_is_skipped(self, tmp_path):
+        """Nonexistent workspace_dir is gracefully skipped."""
+        bundled = tmp_path / "bundled"
+        bundled.mkdir()
+        create_skill_dir(bundled, "test", "Test skill")
+
+        config = SkillsConfig(
+            bundled_dir=bundled,
+            user_dir=None,
+            workspace_dir=tmp_path / "nonexistent",
+        )
+        manager = SkillManager(config)
+        manager.discover()
+
+        assert manager.skill_count == 1

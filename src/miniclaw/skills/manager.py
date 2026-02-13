@@ -54,9 +54,13 @@ class SkillManager:
     def discover(self) -> list[SkillMetadata]:
         """Discover skills from configured directories.
 
-        Scans bundled_dir (if set) and user_dir for valid skill directories.
-        Skills are loaded and registered, with user skills taking precedence
-        over bundled skills of the same name.
+        Scans directories in order of precedence (lowest to highest):
+        1. bundled_dir - Skills included with MiniClaw
+        2. user_dir - User's personal skills (~/.miniclaw/skills)
+        3. workspace_dir - Project-specific skills (optional)
+
+        Skills are loaded and registered. If two skills have the same name,
+        the one from the higher priority source wins.
 
         Returns:
             List of metadata for all discovered skills.
@@ -73,11 +77,21 @@ class SkillManager:
                 except (SkillParseError, CodeSkillLoadError) as e:
                     logger.warning("Failed to load skill from %s: %s", skill_dir, e)
 
-        # Load user skills (higher priority, will override bundled)
+        # Load user skills (medium priority, will override bundled)
         if self.config.user_dir and self.config.user_dir.exists():
             for skill_dir in self._scan_skill_dirs(self.config.user_dir):
                 try:
                     skill = self.load_skill(skill_dir, source=SkillSource.USER)
+                    self.register(skill)
+                    discovered.append(skill.metadata)
+                except (SkillParseError, CodeSkillLoadError) as e:
+                    logger.warning("Failed to load skill from %s: %s", skill_dir, e)
+
+        # Load workspace skills (highest priority, will override user and bundled)
+        if self.config.workspace_dir and self.config.workspace_dir.exists():
+            for skill_dir in self._scan_skill_dirs(self.config.workspace_dir):
+                try:
+                    skill = self.load_skill(skill_dir, source=SkillSource.WORKSPACE)
                     self.register(skill)
                     discovered.append(skill.metadata)
                 except (SkillParseError, CodeSkillLoadError) as e:
