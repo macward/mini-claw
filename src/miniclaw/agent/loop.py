@@ -138,7 +138,23 @@ class AgentLoop:
 
             # Check if LLM wants to call tools
             if assistant_message.tool_calls:
-                messages.append(assistant_message.model_dump())
+                # Only include fields accepted by Groq API (exclude 'annotations')
+                msg_dict: dict[str, Any] = {
+                    "role": assistant_message.role,
+                    "content": assistant_message.content,
+                    "tool_calls": [
+                        {
+                            "id": tc.id,
+                            "type": tc.type,
+                            "function": {
+                                "name": tc.function.name,
+                                "arguments": tc.function.arguments,
+                            },
+                        }
+                        for tc in assistant_message.tool_calls
+                    ],
+                }
+                messages.append(msg_dict)
 
                 for tool_call in assistant_message.tool_calls:
                     tool_name = tool_call.function.name
