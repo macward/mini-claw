@@ -116,8 +116,11 @@ class BashTool(Tool):
             return False, f"Command not allowed: {base_cmd}"
 
         # Special handling for sh -c
-        if base_cmd == "sh" and len(argv) >= 3 and argv[1] == "-c":
-            # For sh -c, we need to validate the inner command too
+        if base_cmd == "sh":
+            # Only allow: sh -c "command" (exactly 3 args)
+            if len(argv) != 3 or argv[1] != "-c":
+                return False, "sh only allowed as 'sh -c \"command\"' (no extra arguments)"
+
             inner_cmd = argv[2]
 
             # Check inner command for forbidden patterns
@@ -125,14 +128,17 @@ class BashTool(Tool):
                 if re.search(pattern, inner_cmd):
                     return False, f"Shell operators not allowed in sh -c: {pattern}"
 
-            # Parse inner command to check base command
+            # Parse inner command to check base command (fail-closed)
             try:
                 inner_argv = shlex.split(inner_cmd)
-                if inner_argv and inner_argv[0] not in ALLOWED_COMMANDS:
-                    return False, f"Command not allowed in sh -c: {inner_argv[0]}"
-            except ValueError:
-                # If we can't parse, be conservative
-                pass
+            except ValueError as e:
+                return False, f"Cannot parse inner command: {e}"
+
+            if not inner_argv:
+                return False, "Empty inner command in sh -c"
+
+            if inner_argv[0] not in ALLOWED_COMMANDS:
+                return False, f"Command not allowed in sh -c: {inner_argv[0]}"
 
         return True, None
 

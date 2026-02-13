@@ -231,11 +231,21 @@ class TelegramBot:
         finally:
             self.sessions.release(chat_id)
 
+    async def _post_init(self, application: Application) -> None:
+        """Called after Application.initialize()."""
+        self.sessions.start_cleanup_task()
+
+    async def _post_shutdown(self, application: Application) -> None:
+        """Called after Application.shutdown()."""
+        self.sessions.stop_cleanup_task()
+
     def build_app(self) -> Application:
         """Build the Telegram application."""
         self._app = (
             Application.builder()
             .token(self.token)
+            .post_init(self._post_init)
+            .post_shutdown(self._post_shutdown)
             .build()
         )
 
@@ -278,7 +288,6 @@ class TelegramBot:
             logger.info(f"Cleaned up {stale_count} stale container(s)")
 
         app = self.build_app()
-        self.sessions.start_cleanup_task()
 
         logger.info("Starting Telegram bot...")
         app.run_polling()

