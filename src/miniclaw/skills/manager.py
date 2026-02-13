@@ -29,6 +29,7 @@ class SkillManager:
     - Registration and retrieval of skills by name
     - Precedence handling (user skills override bundled)
     - Prompt generation for LLM context
+    - Cache with mtime tracking for efficient refresh
 
     Example:
         config = SkillsConfig(bundled_dir=Path("skills/bundled"))
@@ -40,6 +41,9 @@ class SkillManager:
 
         # Execute a skill
         result = await manager.execute("summarize", ctx)
+
+        # Refresh only modified skills
+        changed = manager.refresh_changed()
     """
 
     def __init__(self, config: SkillsConfig | None = None) -> None:
@@ -50,6 +54,8 @@ class SkillManager:
         """
         self.config = config or SkillsConfig()
         self._registry: dict[str, Skill] = {}
+        self._mtimes: dict[str, float] = {}  # skill_name -> mtime of SKILL.md
+        self._skill_paths: dict[str, Path] = {}  # skill_name -> skill_dir path
 
     def discover(self) -> list[SkillMetadata]:
         """Discover skills from configured directories.
@@ -72,7 +78,7 @@ class SkillManager:
             for skill_dir in self._scan_skill_dirs(self.config.bundled_dir):
                 try:
                     skill = self.load_skill(skill_dir, source=SkillSource.BUNDLED)
-                    self.register(skill)
+                    self.register(skill, skill_dir=skill_dir)
                     discovered.append(skill.metadata)
                 except (SkillParseError, CodeSkillLoadError) as e:
                     logger.warning("Failed to load skill from %s: %s", skill_dir, e)
@@ -82,7 +88,7 @@ class SkillManager:
             for skill_dir in self._scan_skill_dirs(self.config.user_dir):
                 try:
                     skill = self.load_skill(skill_dir, source=SkillSource.USER)
-                    self.register(skill)
+                    self.register(skill, skill_dir=skill_dir)
                     discovered.append(skill.metadata)
                 except (SkillParseError, CodeSkillLoadError) as e:
                     logger.warning("Failed to load skill from %s: %s", skill_dir, e)
@@ -92,7 +98,7 @@ class SkillManager:
             for skill_dir in self._scan_skill_dirs(self.config.workspace_dir):
                 try:
                     skill = self.load_skill(skill_dir, source=SkillSource.WORKSPACE)
-                    self.register(skill)
+                    self.register(skill, skill_dir=skill_dir)
                     discovered.append(skill.metadata)
                 except (SkillParseError, CodeSkillLoadError) as e:
                     logger.warning("Failed to load skill from %s: %s", skill_dir, e)
@@ -144,7 +150,7 @@ class SkillManager:
         else:
             return PromptSkill(skill_dir, source=source)
 
-    def register(self, skill: Skill) -> None:
+    def register(self, skill: Skill, skill_dir: Path | None = None) -> None:
         """Register a skill in the registry.
 
         If a skill with the same name already exists, the new skill
@@ -152,24 +158,33 @@ class SkillManager:
 
         Args:
             skill: The skill to register.
+            skill_dir: Directory the skill was loaded from (for mtime tracking).
         """
         name = skill.name
         existing = self._registry.get(name)
 
-        if existing is None:
+        should_register = existing is None or (
+            skill.metadata.source.priority > existing.metadata.source.priority
+        )
+
+        if should_register:
             self._registry[name] = skill
-        else:
-            # Higher priority source wins
-            if skill.metadata.source.priority > existing.metadata.source.priority:
-                self._registry[name] = skill
+            # Track mtime for cache invalidation
+            if skill_dir is not None:
+                self._skill_paths[name] = skill_dir
+                skill_md = skill_dir / "SKILL.md"
+                if skill_md.exists():
+                    self._mtimes[name] = skill_md.stat().st_mtime
 
     def unregister(self, name: str) -> None:
-        """Remove a skill from the registry.
+        """Remove a skill from the registry and its cache entries.
 
         Args:
             name: Name of the skill to remove.
         """
         self._registry.pop(name, None)
+        self._mtimes.pop(name, None)
+        self._skill_paths.pop(name, None)
 
     def get(self, name: str) -> Skill | None:
         """Get a skill by name.
@@ -359,9 +374,77 @@ class SkillManager:
         """Re-scan directories and update the registry.
 
         Clears the current registry and re-discovers all skills.
+        This is a full refresh that reloads everything.
+        """
+        self.clear_cache()
+        self.discover()
+
+    def refresh_changed(self) -> list[str]:
+        """Refresh only skills whose files have changed.
+
+        Checks mtime of each skill's SKILL.md and reloads only those
+        that have been modified since last load.
+
+        Returns:
+            List of skill names that were reloaded.
+        """
+        reloaded: list[str] = []
+
+        for name, skill_dir in list(self._skill_paths.items()):
+            skill_md = skill_dir / "SKILL.md"
+            if not skill_md.exists():
+                # Skill was deleted, remove from registry
+                self.unregister(name)
+                continue
+
+            try:
+                current_mtime = skill_md.stat().st_mtime
+            except OSError as e:
+                logger.warning("Cannot stat skill %s: %s", name, e)
+                continue
+
+            cached_mtime = self._mtimes.get(name, 0)
+
+            if current_mtime > cached_mtime:
+                # Skill has been modified, reload it
+                skill = self._registry.get(name)
+                if skill is None:
+                    # Cache inconsistency - skill in paths but not registry
+                    logger.warning("Cache inconsistency for skill %s, skipping", name)
+                    continue
+
+                try:
+                    source = skill.metadata.source
+                    new_skill = self.load_skill(skill_dir, source=source)
+                    self._registry[name] = new_skill
+                    self._mtimes[name] = current_mtime
+                    reloaded.append(name)
+                    logger.debug("Reloaded modified skill: %s", name)
+                except (SkillParseError, CodeSkillLoadError) as e:
+                    logger.warning("Failed to reload skill %s: %s", name, e)
+
+        return reloaded
+
+    def clear_cache(self) -> None:
+        """Clear the skill cache completely.
+
+        Removes all registered skills and their mtime tracking.
+        Call discover() after this to reload skills.
         """
         self._registry.clear()
-        self.discover()
+        self._mtimes.clear()
+        self._skill_paths.clear()
+
+    def get_skill_mtime(self, name: str) -> float | None:
+        """Get the cached mtime for a skill.
+
+        Args:
+            name: Name of the skill.
+
+        Returns:
+            Unix timestamp of when the skill was last modified, or None.
+        """
+        return self._mtimes.get(name)
 
     @property
     def skill_count(self) -> int:

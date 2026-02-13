@@ -780,3 +780,152 @@ class TestSkillManagerMatch:
         matches_high = manager.match("documents", threshold=0.9)
 
         assert len(matches_low) >= len(matches_high)
+
+
+class TestSkillManagerCache:
+    """Tests for skill caching with mtime tracking."""
+
+    def test_discover_tracks_mtime(self, tmp_path):
+        """Discover should store mtime for each skill."""
+        bundled = tmp_path / "bundled"
+        bundled.mkdir()
+        create_skill_dir(bundled, "test_skill", "Test skill")
+
+        config = SkillsConfig(bundled_dir=bundled, user_dir=None)
+        manager = SkillManager(config)
+        manager.discover()
+
+        mtime = manager.get_skill_mtime("test_skill")
+        assert mtime is not None
+        assert mtime > 0
+
+    def test_refresh_changed_reloads_modified(self, tmp_path):
+        """refresh_changed should reload skills with changed mtime."""
+        import time
+
+        bundled = tmp_path / "bundled"
+        bundled.mkdir()
+        skill_dir = create_skill_dir(bundled, "changeable", "Original description")
+
+        config = SkillsConfig(bundled_dir=bundled, user_dir=None)
+        manager = SkillManager(config)
+        manager.discover()
+
+        assert manager.get("changeable").description == "Original description"
+        original_mtime = manager.get_skill_mtime("changeable")
+
+        # Ensure filesystem mtime has different granularity
+        time.sleep(0.01)
+
+        # Modify the skill
+        skill_md = skill_dir / "SKILL.md"
+        skill_md.write_text("""---
+name: changeable
+description: Modified description
+---
+New instructions.
+""")
+
+        reloaded = manager.refresh_changed()
+
+        assert "changeable" in reloaded
+        assert manager.get("changeable").description == "Modified description"
+        assert manager.get_skill_mtime("changeable") > original_mtime
+
+    def test_refresh_changed_skips_unchanged(self, tmp_path):
+        """refresh_changed should not reload unchanged skills."""
+        bundled = tmp_path / "bundled"
+        bundled.mkdir()
+        create_skill_dir(bundled, "static_skill", "Static description")
+
+        config = SkillsConfig(bundled_dir=bundled, user_dir=None)
+        manager = SkillManager(config)
+        manager.discover()
+
+        reloaded = manager.refresh_changed()
+
+        assert reloaded == []
+
+    def test_refresh_changed_removes_deleted(self, tmp_path):
+        """refresh_changed should remove skills whose files were deleted."""
+        import shutil
+
+        bundled = tmp_path / "bundled"
+        bundled.mkdir()
+        skill_dir = create_skill_dir(bundled, "deletable", "Will be deleted")
+
+        config = SkillsConfig(bundled_dir=bundled, user_dir=None)
+        manager = SkillManager(config)
+        manager.discover()
+
+        assert manager.get("deletable") is not None
+
+        # Delete the skill
+        shutil.rmtree(skill_dir)
+
+        manager.refresh_changed()
+
+        assert manager.get("deletable") is None
+        assert manager.get_skill_mtime("deletable") is None
+
+    def test_clear_cache(self, tmp_path):
+        """clear_cache should remove all skills and tracking data."""
+        bundled = tmp_path / "bundled"
+        bundled.mkdir()
+        create_skill_dir(bundled, "skill_a", "Skill A")
+        create_skill_dir(bundled, "skill_b", "Skill B")
+
+        config = SkillsConfig(bundled_dir=bundled, user_dir=None)
+        manager = SkillManager(config)
+        manager.discover()
+
+        assert manager.skill_count == 2
+
+        manager.clear_cache()
+
+        assert manager.skill_count == 0
+        assert manager.get_skill_mtime("skill_a") is None
+        assert manager.get_skill_mtime("skill_b") is None
+
+    def test_unregister_cleans_cache(self, tmp_path):
+        """unregister should clean up mtime and path tracking."""
+        bundled = tmp_path / "bundled"
+        bundled.mkdir()
+        create_skill_dir(bundled, "remove_me", "To be removed")
+
+        config = SkillsConfig(bundled_dir=bundled, user_dir=None)
+        manager = SkillManager(config)
+        manager.discover()
+
+        assert manager.get_skill_mtime("remove_me") is not None
+
+        manager.unregister("remove_me")
+
+        assert manager.get("remove_me") is None
+        assert manager.get_skill_mtime("remove_me") is None
+
+    def test_get_skill_mtime_unknown(self, tmp_path):
+        """get_skill_mtime returns None for unknown skills."""
+        config = SkillsConfig(bundled_dir=tmp_path, user_dir=None)
+        manager = SkillManager(config)
+
+        assert manager.get_skill_mtime("nonexistent") is None
+
+    def test_refresh_reloads_all(self, tmp_path):
+        """refresh should clear cache and reload all skills."""
+        bundled = tmp_path / "bundled"
+        bundled.mkdir()
+        create_skill_dir(bundled, "skill_one", "First skill")
+
+        config = SkillsConfig(bundled_dir=bundled, user_dir=None)
+        manager = SkillManager(config)
+        manager.discover()
+
+        # Add another skill
+        create_skill_dir(bundled, "skill_two", "Second skill")
+
+        manager.refresh()
+
+        assert manager.skill_count == 2
+        assert manager.get("skill_one") is not None
+        assert manager.get("skill_two") is not None
