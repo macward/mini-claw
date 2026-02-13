@@ -12,12 +12,21 @@ def main() -> None:
     """Main entry point."""
     load_dotenv(find_dotenv(usecwd=True))
 
-    if len(sys.argv) > 1 and sys.argv[1] == "bot":
-        from .telegram import TelegramBot
+    if len(sys.argv) > 1:
+        command = sys.argv[1]
 
-        bot = TelegramBot()
-        bot.run()
-        return
+        if command == "bot":
+            from .telegram import TelegramBot
+
+            bot = TelegramBot()
+            bot.run()
+            return
+
+        if command == "skills":
+            from .skills.cli import run_skills_cli
+
+            # Pass remaining args (after 'skills') to skills CLI
+            sys.exit(run_skills_cli(sys.argv[2:]))
 
     asyncio.run(run_cli())
 
