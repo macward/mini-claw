@@ -199,6 +199,38 @@ Security Controls:
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
+## Memory Layer
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                         MEMORY LAYER                                 │
+│                                                                      │
+│  ┌──────────────────────────────────────────────────────────────┐   │
+│  │                     MemoryManager                             │   │
+│  │  - load_all(): Load facts from storage                        │   │
+│  │  - format_for_prompt(): Generate <memory> block               │   │
+│  │  - extract_from_conversation(): Auto-extract at session end   │   │
+│  └──────────────────────────────────────────────────────────────┘   │
+│                              │                                       │
+│              ┌───────────────┼───────────────┐                       │
+│              ▼               ▼               ▼                       │
+│  ┌──────────────────┐ ┌──────────────────┐ ┌──────────────────────┐ │
+│  │   MemoryStore    │ │  FactExtractor   │ │   Memory Tools       │ │
+│  │   (SQLite)       │ │  (LLM-based)     │ │ remember / forget    │ │
+│  └──────────────────┘ └──────────────────┘ └──────────────────────┘ │
+│           │                                                          │
+│           ▼                                                          │
+│  ┌──────────────────────────────────────────────────────────────┐   │
+│  │        ~/.miniclaw/memory.db (persistent facts)               │   │
+│  └──────────────────────────────────────────────────────────────┘   │
+│                                                                      │
+│  Data Flow:                                                          │
+│  1. Facts loaded at agent start → injected into system prompt       │
+│  2. User: "recuerda que trabajo en Google" → remember tool          │
+│  3. Session end → FactExtractor extracts new facts automatically    │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
 ## File Layout
 
 ```
@@ -214,8 +246,9 @@ src/miniclaw/
 ├── memory/
 │   ├── __init__.py
 │   ├── extractor.py     # LLM-based fact extraction
-│   ├── manager.py       # MemoryManager
-│   ├── store.py         # SQLite storage
+│   ├── manager.py       # MemoryManager orchestrator
+│   ├── models.py        # Fact dataclass
+│   ├── store.py         # SQLite storage (MemoryStore)
 │   └── tools.py         # RememberTool, ForgetTool
 ├── sandbox/
 │   ├── __init__.py

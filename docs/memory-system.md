@@ -2,6 +2,173 @@
 
 ## Descripción General
 
+MiniClaw implementa un sistema de memoria de dos capas:
+
+1. **Session Memory** (temporal): Historial de conversación y contexto por chat
+2. **Facts Memory** (persistente): Hechos estables sobre el usuario que sobreviven entre sesiones
+
+---
+
+# Parte 1: Facts Memory (Memoria Persistente)
+
+El sistema de Facts almacena información estable sobre el usuario que se mantiene entre sesiones.
+
+## Arquitectura
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                         FACTS MEMORY                                 │
+│                                                                      │
+│  ┌───────────────────────────────────────────────────────────────┐  │
+│  │                     MemoryManager                              │  │
+│  │  - load_all(): Cargar todos los facts                         │  │
+│  │  - format_for_prompt(): Generar bloque <memory>               │  │
+│  │  - extract_from_conversation(): Extracción automática         │  │
+│  └───────────────────────────────────────────────────────────────┘  │
+│                              │                                       │
+│              ┌───────────────┼───────────────┐                       │
+│              ▼               ▼               ▼                       │
+│  ┌──────────────────┐ ┌──────────────────┐ ┌──────────────────────┐ │
+│  │   MemoryStore    │ │  FactExtractor   │ │ RememberTool/        │ │
+│  │   (SQLite)       │ │  (LLM-based)     │ │ ForgetTool           │ │
+│  └──────────────────┘ └──────────────────┘ └──────────────────────┘ │
+│           │                                                          │
+│           ▼                                                          │
+│  ┌───────────────────────────────────────────────────────────────┐  │
+│  │              ~/.miniclaw/memory.db (SQLite)                    │  │
+│  └───────────────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+## Modelo de Datos: Fact
+
+```python
+@dataclass(frozen=True)
+class Fact:
+    key: str          # Categoría: 'nombre', 'trabajo', 'preferencia'...
+    value: str        # El hecho en tercera persona
+    id: int | None    # ID en la base de datos
+    source: str       # 'auto' (extraído) o 'explicit' (usuario)
+    created_at: str   # ISO timestamp
+    updated_at: str   # ISO timestamp
+```
+
+## Componentes
+
+### MemoryStore (SQLite)
+
+Almacenamiento persistente con deduplicación por `(key, value)`.
+
+```sql
+CREATE TABLE facts (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    key         TEXT NOT NULL,
+    value       TEXT NOT NULL,
+    source      TEXT NOT NULL DEFAULT 'auto',
+    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(key, value)
+)
+```
+
+**Operaciones:**
+```python
+store = MemoryStore(Path("~/.miniclaw/memory.db"))
+store.init_db()
+
+# Guardar (upsert por key+value)
+fact = store.save_fact(Fact(key="trabajo", value="trabaja en Google"))
+
+# Consultar
+all_facts = store.get_all()
+work_facts = store.get_by_key("trabajo")
+
+# Eliminar
+store.delete(fact_id=1)
+store.delete_by_key("trabajo")  # Todos los facts de esa categoría
+```
+
+### FactExtractor (Extracción automática)
+
+Usa el LLM para extraer hechos estables de las conversaciones al finalizar la sesión.
+
+```python
+extractor = FactExtractor(
+    llm_client=AsyncGroq(),
+    model="llama-3.1-70b-versatile"
+)
+
+facts = await extractor.extract(messages)
+# → [Fact(key="proyecto", value="está trabajando en MiniClaw"), ...]
+```
+
+**Criterios de extracción:**
+- Solo hechos **estables** (no estados temporales como "está cansado")
+- Valores en **tercera persona** ("trabaja en Google", no "trabajo en")
+- Keys descriptivas en español: `nombre`, `trabajo`, `ubicacion`, `hobby`, `proyecto`, `preferencia`, `tecnologia`...
+
+### RememberTool y ForgetTool
+
+Herramientas para que el usuario gestione su memoria explícitamente.
+
+```python
+# remember(key="nombre", value="se llama Juan")
+remember_tool = RememberTool(store)
+result = await remember_tool.execute(key="nombre", value="se llama Juan")
+# → "Recordado: nombre → se llama Juan"
+
+# forget(key="trabajo")
+forget_tool = ForgetTool(store)
+result = await forget_tool.execute(key="trabajo")
+# → "Olvidado: 2 hechos sobre 'trabajo'"
+```
+
+### MemoryManager
+
+Orquestador central que coordina todos los componentes.
+
+```python
+manager = MemoryManager(store=store, extractor=extractor)
+
+# Cargar facts para el prompt
+facts = manager.load_all()
+prompt_block = manager.format_for_prompt(facts)
+# → "<memory>\nLo que sabés del usuario:\n- nombre: se llama Juan\n- trabajo: trabaja en Google\n</memory>"
+
+# Extracción al final de sesión
+new_facts = await manager.extract_from_conversation(messages)
+```
+
+## Integración con el Sistema
+
+### Inyección en System Prompt
+
+Los facts se inyectan en el prompt del agente:
+
+```xml
+<memory>
+Lo que sabés del usuario:
+- nombre: se llama Juan
+- trabajo: trabaja en Google
+- preferencia: prefiere TypeScript
+</memory>
+```
+
+### Hook on_session_end
+
+Al finalizar una sesión, se extraen automáticamente facts nuevos:
+
+```python
+# En SessionManager
+async def on_session_end(self, chat_id: str):
+    messages = self.get_messages(chat_id)
+    await memory_manager.extract_from_conversation(messages)
+```
+
+---
+
+# Parte 2: Session Memory (Memoria de Sesión)
+
 MiniClaw implementa un sistema de memoria basado en **sesiones persistentes** que mantiene el estado de cada conversación (chat) entre interacciones. El sistema está implementado en `SessionManager` y almacena:
 
 - Historial de mensajes

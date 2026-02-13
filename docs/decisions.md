@@ -398,3 +398,155 @@ miniclaw skills create <name> [--code] [-d DESC]
 - Config persistence via save_config()
 - Skill names must follow validation rules
 - CLI has no access to runtime ToolRegistry
+
+---
+
+## ADR-016: Two-Layer Memory System
+
+**Status**: Accepted
+**Date**: 2026-02
+
+### Context
+Need to remember information about users across sessions and within sessions.
+
+### Decision
+Implement two memory layers:
+1. **Session Memory**: Temporary conversation history per chat_id
+2. **Facts Memory**: Persistent key-value facts about the user
+
+### Rationale
+- **Session memory**: Enables context within a conversation
+- **Facts memory**: Enables long-term personalization
+- **Separation**: Different persistence needs (TTL vs permanent)
+
+### Consequences
+- Two storage backends (JSON files vs SQLite)
+- Must coordinate extraction at session end
+- Memory block injected into every system prompt
+
+---
+
+## ADR-017: SQLite for Facts Storage
+
+**Status**: Accepted
+**Date**: 2026-02
+
+### Context
+Need persistent storage for user facts with deduplication.
+
+### Decision
+Use SQLite with `UNIQUE(key, value)` constraint.
+
+### Schema
+```sql
+CREATE TABLE facts (
+    id          INTEGER PRIMARY KEY,
+    key         TEXT NOT NULL,
+    value       TEXT NOT NULL,
+    source      TEXT DEFAULT 'auto',
+    created_at  TEXT DEFAULT (datetime('now')),
+    updated_at  TEXT DEFAULT (datetime('now')),
+    UNIQUE(key, value)
+)
+```
+
+### Rationale
+- **Deduplication**: Natural with UNIQUE constraint
+- **No dependencies**: sqlite3 is built into Python
+- **Query flexibility**: Can filter by key, search, etc.
+- **Upsert support**: ON CONFLICT for timestamp updates
+
+### Consequences
+- Single user only (no chat_id partitioning)
+- Database file at `~/.miniclaw/memory.db`
+- Must handle connection lifecycle
+
+---
+
+## ADR-018: LLM-Based Fact Extraction
+
+**Status**: Accepted
+**Date**: 2026-02
+
+### Context
+Need to automatically learn about users from conversations.
+
+### Decision
+Use LLM to extract stable facts at session end via `FactExtractor`.
+
+### Extraction Rules
+- Only **stable facts** (not temporary states)
+- Values in **third person** ("works at Google")
+- Dynamic keys in Spanish (nombre, trabajo, preferencia...)
+- Low temperature (0.1) for consistency
+
+### Rationale
+- **Automatic**: No user action required
+- **Intelligent**: LLM understands context
+- **Flexible keys**: Not limited to predefined categories
+
+### Consequences
+- Additional LLM call at session end
+- May extract incorrect or irrelevant facts
+- JSON parsing required for response
+
+---
+
+## ADR-019: Explicit Memory Tools (remember/forget)
+
+**Status**: Accepted
+**Date**: 2026-02
+
+### Context
+Users should be able to explicitly control what is remembered.
+
+### Decision
+Provide `remember` and `forget` tools for explicit management.
+
+### Tools
+```python
+remember(key="nombre", value="se llama Juan")  # source='explicit'
+forget(key="trabajo")  # deletes all facts with that key
+```
+
+### Rationale
+- **User control**: Can correct or remove facts
+- **Trust**: User knows what's stored
+- **Explicit source**: Distinguishes from auto-extracted
+
+### Consequences
+- Two additional tools in ToolRegistry
+- ForgetTool deletes ALL facts with matching key
+- No confirmation prompt on forget
+
+---
+
+## ADR-020: Memory Block in System Prompt
+
+**Status**: Accepted
+**Date**: 2026-02
+
+### Context
+The agent needs access to stored facts about the user.
+
+### Decision
+Inject facts as XML block at start of system prompt.
+
+### Format
+```xml
+<memory>
+Lo que sabés del usuario:
+- nombre: se llama Juan
+- trabajo: trabaja en Google
+</memory>
+```
+
+### Rationale
+- **Always available**: Part of every conversation
+- **Structured**: Easy for LLM to parse
+- **Contextual**: Spanish phrasing matches agent persona
+
+### Consequences
+- Increases prompt size with each fact
+- Must limit facts to avoid token bloat
+- No semantic search (all facts included)
