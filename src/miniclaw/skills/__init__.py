@@ -24,6 +24,7 @@ from .parser import (
 )
 from .prompt_skill import PromptSkill, load_prompt_skill
 from .manager import SkillManager, SkillsConfig
+from .executor_tool import SkillExecutorTool
 
 __all__ = [
     "Skill",
@@ -39,4 +40,5 @@ __all__ = [
     "load_prompt_skill",
     "SkillManager",
     "SkillsConfig",
+    "SkillExecutorTool",
 ]

@@ -29,6 +29,7 @@ class AgentConfig:
     max_turns: int = 10
     max_consecutive_errors: int = 3
     max_repeated_calls: int = 2
+    available_skills_block: str = ""
 
 
 @dataclass
@@ -93,7 +94,13 @@ class AgentLoop:
         self._reset_state()
 
         messages: list[dict[str, Any]] = [
-            {"role": "system", "content": build_system_prompt(self.registry.get_tools_schema())},
+            {
+                "role": "system",
+                "content": build_system_prompt(
+                    self.registry.get_tools_schema(),
+                    self.config.available_skills_block,
+                ),
+            },
         ]
 
         if history:
